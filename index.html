@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>VisionScan — AI Object Recognition</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Exo+2:wght@300;400;600;800&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --green: #00ff88;
+      --green-dim: #a8f0c6;
+      --green-dark: #0d3d2a;
+      --green-mid: #1a5a3a;
+      --bg: #050a0e;
+      --surface: rgba(0,255,136,0.02);
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      overflow-x: hidden;
+    }
+
+    body {
+      font-family: 'Share Tech Mono', monospace;
+      color: var(--green-dim);
+    }
+
+    /* Scanline overlay */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,255,120,0.012) 2px,
+        rgba(0,255,120,0.012) 4px
+      );
+      pointer-events: none;
+      z-index: 999;
+    }
+
+    /* ─── Layout ─── */
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+    }
+
+    /* ─── Header ─── */
+    .header {
+      width: 100%;
+      max-width: 520px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 14px 0 18px;
+    }
+
+    .logo-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-ring {
+      width: 30px;
+      height: 30px;
+      border: 2px solid var(--green);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: pulse-ring 2.2s ease-in-out infinite;
+    }
+
+    @keyframes pulse-ring {
+      0%,100% { box-shadow: 0 0 0 0 rgba(0,255,136,.45); }
+      50%      { box-shadow: 0 0 0 10px rgba(0,255,136,0); }
+    }
+
+    .logo-dot {
+      width: 9px;
+      height: 9px;
+      background: var(--green);
+      border-radius: 50%;
+    }
+
+    .app-title {
+      font-family: 'Exo 2', sans-serif;
+      font-weight: 800;
+      font-size: 1.4rem;
+      letter-spacing: .18em;
+      color: #fff;
+      text-transform: uppercase;
+    }
+
+    .app-sub {
+      font-size: .6rem;
+      color: var(--green-mid);
+      letter-spacing: .28em;
+      text-transform: uppercase;
+    }
+
+    /* ─── Status bar ─── */
+    .status-bar {
+      width: 100%;
+      max-width: 520px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 7px 0;
+      font-size: .6rem;
+      color: var(--green-mid);
+      letter-spacing: .12em;
+      border-bottom: 1px solid var(--green-dark);
+      margin-bottom: 0;
+    }
+
+    .s-dot {
+      display: inline-block;
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: var(--green-mid);
+      margin-right: 5px;
+      vertical-align: middle;
+    }
+    .s-dot.on { background: var(--green); animation: blink 1s step-end infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* ─── Camera box ─── */
+    .cam-wrap {
+      width: 100%;
+      max-width: 520px;
+      position: relative;
+      background: #000;
+      overflow: hidden;
+      border: 1px solid var(--green-dark);
+    }
+
+    video {
+      width: 100%;
+      aspect-ratio: 4/3;
+      object-fit: cover;
+      display: block;
+    }
+
+    canvas { display: none; }
+
+    /* corners */
+    .c { position: absolute; width: 22px; height: 22px; z-index: 5; }
+    .c-tl { top:8px;  left:8px;  border-top:2px solid var(--green); border-left:2px solid var(--green); }
+    .c-tr { top:8px;  right:8px; border-top:2px solid var(--green); border-right:2px solid var(--green); }
+    .c-bl { bottom:8px; left:8px;  border-bottom:2px solid var(--green); border-left:2px solid var(--green); }
+    .c-br { bottom:8px; right:8px; border-bottom:2px solid var(--green); border-right:2px solid var(--green); }
+
+    /* vignette */
+    .cam-wrap::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(to bottom,
+        rgba(0,255,136,.05) 0%,
+        transparent 25%,
+        transparent 75%,
+        rgba(0,255,136,.05) 100%);
+      pointer-events: none;
+      z-index: 2;
+    }
+
+    /* scan line */
+    .scan-line {
+      display: none;
+      position: absolute;
+      left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--green), transparent);
+      z-index: 4;
+      animation: scan-anim 3s linear infinite;
+      opacity: .55;
+    }
+    .scan-line.visible { display: block; }
+    @keyframes scan-anim { 0%{top:0} 100%{top:100%} }
+
+    /* cam offline overlay */
+    .cam-off {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: rgba(0,0,0,.88);
+      z-index: 10;
+    }
+    .cam-off-icon { font-size: 2rem; opacity: .5; }
+    .cam-off-text { font-size: .75rem; color: var(--green-mid); letter-spacing: .12em; }
+
+    /* analyzing overlay */
+    .analyzing-overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,.6);
+      z-index: 8;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .analyzing-overlay.visible { display: flex; }
+
+    .spinner {
+      width: 40px; height: 40px;
+      border: 2px solid var(--green-dark);
+      border-top-color: var(--green);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .analyzing-txt { font-size: .7rem; color: var(--green); letter-spacing: .2em; }
+
+    /* ─── Controls ─── */
+    .controls {
+      width: 100%;
+      max-width: 520px;
+      display: flex;
+      gap: 10px;
+      padding: 14px 0;
+    }
+
+    .btn {
+      flex: 1;
+      padding: 13px 8px;
+      border: 1px solid var(--green-dark);
+      background: transparent;
+      color: var(--green-dim);
+      font-family: 'Share Tech Mono', monospace;
+      font-size: .72rem;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: border-color .15s, color .15s, background .15s;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .btn:hover:not(:disabled) {
+      border-color: var(--green);
+      color: var(--green);
+      background: rgba(0,255,136,.05);
+    }
+
+    .btn:disabled { opacity: .3; cursor: not-allowed; }
+
+    .btn-primary {
+      border-color: var(--green);
+      background: var(--green);
+      color: var(--bg);
+      font-weight: 700;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: #33ffaa;
+      border-color: #33ffaa;
+      color: var(--bg);
+    }
+
+    /* loading shimmer on scan button */
+    .btn-scan-loading::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--green), transparent);
+      animation: shimmer 1s ease-in-out infinite;
+    }
+    @keyframes shimmer { 0%{transform:translateX(-100%)} 100%{transform:translateX(100%)} }
+
+    /* ─── API Key row ─── */
+    .api-row {
+      width: 100%;
+      max-width: 520px;
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .api-input {
+      flex: 1;
+      padding: 10px 12px;
+      border: 1px solid var(--green-dark);
+      background: rgba(0,255,136,.03);
+      color: var(--green-dim);
+      font-family: 'Share Tech Mono', monospace;
+      font-size: .7rem;
+      letter-spacing: .08em;
+      outline: none;
+      transition: border-color .15s;
+    }
+    .api-input::placeholder { color: var(--green-mid); }
+    .api-input:focus { border-color: var(--green); }
+
+    .api-label {
+      font-size: .55rem;
+      color: var(--green-mid);
+      letter-spacing: .2em;
+      text-transform: uppercase;
+      margin-bottom: 5px;
+      width: 100%;
+      max-width: 520px;
+    }
+
+    /* ─── Results ─── */
+    .results {
+      width: 100%;
+      max-width: 520px;
+      border: 1px solid var(--green-dark);
+      background: var(--surface);
+      padding: 16px;
+      min-height: 130px;
+    }
+
+    .results-hdr {
+      font-size: .58rem;
+      color: var(--green-mid);
+      letter-spacing: .25em;
+      text-transform: uppercase;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .results-hdr::after { content:''; flex:1; height:1px; background: var(--green-dark); }
+
+    .tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-bottom: 14px;
+    }
+
+    .tag {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border: 1px solid var(--green-dark);
+      background: rgba(0,255,136,.06);
+      font-size: .72rem;
+      color: var(--green-dim);
+      opacity: 0;
+      transform: translateY(5px);
+      animation: tag-in .35s ease forwards;
+    }
+    @keyframes tag-in { to { opacity:1; transform:translateY(0); } }
+
+    .tag-conf { font-size: .58rem; color: var(--green); }
+
+    .scene-txt {
+      font-family: 'Exo 2', sans-serif;
+      font-weight: 300;
+      font-size: .78rem;
+      color: #5aad80;
+      line-height: 1.75;
+      border-top: 1px solid var(--green-dark);
+      padding-top: 12px;
+      letter-spacing: .03em;
+    }
+
+    .meta-line {
+      font-size: .6rem;
+      color: var(--green-mid);
+      margin-top: 6px;
+      letter-spacing: .05em;
+    }
+
+    .empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 90px;
+      gap: 8px;
+      color: var(--green-mid);
+      font-size: .68rem;
+      letter-spacing: .12em;
+    }
+    .empty-icon { font-size: 1.6rem; opacity: .35; }
+
+    .err {
+      color: #ff4466;
+      font-size: .7rem;
+      padding: 10px 12px;
+      border: 1px solid #4a0011;
+      background: rgba(255,68,102,.05);
+      line-height: 1.6;
+    }
+
+    /* ─── Footer ─── */
+    .footer {
+      width: 100%;
+      max-width: 520px;
+      text-align: center;
+      padding: 18px 0 10px;
+      font-size: .55rem;
+      color: #0f2a1e;
+      letter-spacing: .15em;
+    }
+  </style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="logo-row">
+      <div class="logo-ring"><div class="logo-dot"></div></div>
+      <span class="app-title">VisionScan</span>
+    </div>
+    <div class="app-sub">AI Object Recognition System · v2.0</div>
+  </div>
+
+  <!-- Status -->
+  <div class="status-bar">
+    <span><span class="s-dot" id="camDot"></span><span id="camStatus">CAMERA OFFLINE</span></span>
+    <span>FRAME #<span id="frameCount">0000</span></span>
+    <span id="sysStatus">PRONTO</span>
+  </div>
+
+  <!-- Camera -->
+  <div class="cam-wrap">
+    <div class="c c-tl"></div><div class="c c-tr"></div>
+    <div class="c c-bl"></div><div class="c c-br"></div>
+    <div class="scan-line" id="scanLine"></div>
+
+    <div class="cam-off" id="camOff">
+      <div class="cam-off-icon">📷</div>
+      <div class="cam-off-text">FOTOCAMERA NON ATTIVA</div>
+    </div>
+
+    <div class="analyzing-overlay" id="analyzingOverlay">
+      <div class="spinner"></div>
+      <div class="analyzing-txt">ANALISI IN CORSO...</div>
+    </div>
+
+    <video id="video" playsinline muted></video>
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <!-- API Key -->
+  <div class="api-label">Anthropic API Key</div>
+  <div class="api-row">
+    <input
+      class="api-input"
+      type="password"
+      id="apiKey"
+      placeholder="sk-ant-api03-..."
+      autocomplete="off"
+    />
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <button class="btn btn-primary" id="btnStart">▶ Avvia Fotocamera</button>
+    <button class="btn" id="btnScan" style="display:none">⬤ Scansiona</button>
+    <button class="btn" id="btnStop" style="display:none">■ Stop</button>
+  </div>
+
+  <!-- Results -->
+  <div class="results" id="results">
+    <div class="results-hdr">Output analisi</div>
+    <div class="empty" id="emptyState">
+      <div class="empty-icon">◈</div>
+      <span>Premi SCANSIONA per analizzare</span>
+    </div>
+  </div>
+
+  <div class="footer">POWERED BY CLAUDE VISION · ANTHROPIC</div>
+
+</div>
+
+<script>
+  // ── Elements ──
+  const video       = document.getElementById('video');
+  const canvas      = document.getElementById('canvas');
+  const btnStart    = document.getElementById('btnStart');
+  const btnScan     = document.getElementById('btnScan');
+  const btnStop     = document.getElementById('btnStop');
+  const camOff      = document.getElementById('camOff');
+  const scanLine    = document.getElementById('scanLine');
+  const camDot      = document.getElementById('camDot');
+  const camStatus   = document.getElementById('camStatus');
+  const sysStatus   = document.getElementById('sysStatus');
+  const frameEl     = document.getElementById('frameCount');
+  const resultsEl   = document.getElementById('results');
+  const analyzingOv = document.getElementById('analyzingOverlay');
+  const apiKeyInput = document.getElementById('apiKey');
+
+  let stream = null;
+  let frameCount = 0;
+  let loading = false;
+
+  // ── Camera ──
+  btnStart.addEventListener('click', async () => {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 960 } }
+      });
+      video.srcObject = stream;
+      await video.play();
+      // UI
+      camOff.style.display = 'none';
+      scanLine.classList.add('visible');
+      camDot.classList.add('on');
+      camStatus.textContent = 'CAMERA ATTIVA';
+      btnStart.style.display = 'none';
+      btnScan.style.display  = '';
+      btnStop.style.display  = '';
+    } catch(e) {
+      showError('ACCESSO FOTOCAMERA NEGATO — Controlla i permessi del browser.');
+    }
+  });
+
+  btnStop.addEventListener('click', () => {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = null;
+    video.srcObject = null;
+    camOff.style.display = '';
+    scanLine.classList.remove('visible');
+    camDot.classList.remove('on');
+    camStatus.textContent = 'CAMERA OFFLINE';
+    btnStart.style.display = '';
+    btnScan.style.display  = 'none';
+    btnStop.style.display  = 'none';
+    sysStatus.textContent = 'PRONTO';
+  });
+
+  // ── Scan ──
+  btnScan.addEventListener('click', analyze);
+
+  async function analyze() {
+    const apiKey = apiKeyInput.value.trim();
+    if (!apiKey) { showError('CHIAVE API MANCANTE — Inserisci la tua Anthropic API key.'); return; }
+    if (loading) return;
+
+    loading = true;
+    frameCount++;
+    frameEl.textContent = String(frameCount).padStart(4, '0');
+    sysStatus.textContent = 'ANALISI...';
+    btnScan.disabled = true;
+    btnScan.classList.add('btn-scan-loading');
+    analyzingOv.classList.add('visible');
+
+    try {
+      // Capture frame
+      const ctx = canvas.getContext('2d');
+      canvas.width  = video.videoWidth  || 640;
+      canvas.height = video.videoHeight || 480;
+      ctx.drawImage(video, 0, 0);
+      const base64 = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1000,
+          system: `Sei un sistema di computer vision avanzato. Analizza l'immagine e rispondi SOLO con JSON valido (nessun testo extra, nessun backtick markdown):
+{
+  "objects": [{"name": "nome oggetto in italiano", "confidence": 0.0-1.0}],
+  "scene": "descrizione breve della scena in italiano (1-2 frasi)",
+  "dominant_colors": ["colore1", "colore2"],
+  "lighting": "natural|artificial|mixed"
+}
+Elenca tutti gli oggetti principali visibili. Confidence deve essere un numero tra 0 e 1.`,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
+              { type: 'text',  text: 'Analizza questa immagine e restituisci JSON.' }
+            ]
+          }]
+        })
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error?.message || `HTTP ${resp.status}`);
+      }
+
+      const data = await resp.json();
+      const raw  = data.content?.map(c => c.text || '').join('') || '';
+      const clean = raw.replace(/```json|```/g, '').trim();
+      const parsed = JSON.parse(clean);
+      renderResult(parsed);
+      sysStatus.textContent = 'OK';
+
+    } catch(e) {
+      showError('ERRORE — ' + (e.message || 'Riprova.'));
+      sysStatus.textContent = 'ERRORE';
+    } finally {
+      loading = false;
+      btnScan.disabled = false;
+      btnScan.classList.remove('btn-scan-loading');
+      analyzingOv.classList.remove('visible');
+    }
+  }
+
+  // ── Render ──
+  function renderResult(r) {
+    let html = '<div class="results-hdr">Output analisi</div>';
+
+    if (r.objects && r.objects.length > 0) {
+      html += `<div style="font-size:.58rem;color:var(--green-mid);letter-spacing:.2em;margin-bottom:8px;">OGGETTI RILEVATI [${r.objects.length}]</div>`;
+      html += '<div class="tags">';
+      r.objects.forEach((o, i) => {
+        const delay = i * 0.06;
+        const conf = Math.round((o.confidence || 0.9) * 100);
+        html += `<div class="tag" style="animation-delay:${delay}s">
+          <span>${o.name}</span>
+          <span class="tag-conf">${conf}%</span>
+        </div>`;
+      });
+      html += '</div>';
+    }
+
+    if (r.scene) {
+      html += `<div class="scene-txt">${r.scene}`;
+      if (r.lighting || (r.dominant_colors && r.dominant_colors.length)) {
+        const light = r.lighting ? `LUCE: ${r.lighting}` : '';
+        const colors = r.dominant_colors?.length ? `COLORI: ${r.dominant_colors.join(', ')}` : '';
+        html += `<div class="meta-line">${[light, colors].filter(Boolean).join(' | ')}</div>`;
+      }
+      html += '</div>';
+    }
+
+    resultsEl.innerHTML = html;
+  }
+
+  function showError(msg) {
+    resultsEl.innerHTML = `<div class="results-hdr">Output analisi</div><div class="err">${msg}</div>`;
+  }
+</script>
+</body>
+</html>
